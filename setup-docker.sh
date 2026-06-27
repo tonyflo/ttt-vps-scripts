@@ -11,13 +11,13 @@ SCRIPT_VERSION="v1.1"
 # 0. Initial Checks: Ensures the script is run as root and verifies that
 #    the OS supports apt-get and systemd before proceeding.
 # 1. User Setup: Prompts to create a new non-root user, asks you to set a
-#    password, and grants them passwordless sudo access (NOPASSWD:ALL).
+#    password, and adds them to the sudo group.
 # 2. SSH Hardening: Safely disables direct root login to prevent brute-force
 #    attacks while ensuring password and SSH key access remain enabled for
 #    the new user. Tests the config before applying to prevent lockouts.
 # 3. System Updates: Updates package lists and upgrades all system packages.
 # 4. Core Utilities & Security: Installs essential tools (ufw, curl, wget, git,
-#    ca-certificates, gnupg) and starts Fail2Ban to block malicious IPs.
+#    ca-certificates, gnupg, htop) and starts Fail2Ban to block malicious IPs.
 # 5. Auto-Patching: Installs and configures 'unattended-upgrades' to
 #    automatically apply security updates and clean up old packages weekly.
 # 6. Firewall Lockdown: Enables UFW, denying all incoming traffic by default,
@@ -132,18 +132,14 @@ while true; do
 done
 
 if id "$NEW_USER" &>/dev/null; then
-    info "User '$NEW_USER' already exists, ensuring permissions are set..."
-    echo "$NEW_USER ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/"$NEW_USER" || die "Sudoers setup failed"
-    chmod 0440 /etc/sudoers.d/"$NEW_USER"
+    info "User '$NEW_USER' already exists"
 else
     useradd -m -s /bin/bash "$NEW_USER" >> "$LOG_FILE" 2>&1 || die "User creation failed"
-
-    echo "$NEW_USER ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/"$NEW_USER" \
-        || die "Sudoers setup failed"
-
-    chmod 0440 /etc/sudoers.d/"$NEW_USER"
-    info "Configured user permissions"
+    info "Created user '$NEW_USER'"
 fi
+
+usermod -aG sudo "$NEW_USER" >> "$LOG_FILE" 2>&1 || die "Failed to add user to sudo group"
+info "Added user '$NEW_USER' to sudo group"
 
 echo "Set password for SSH login:"
 passwd "$NEW_USER" || die "Password setup failed"
@@ -203,7 +199,7 @@ ok
 
 step "4/7" "Installing recommended packages"
 
-PACKAGES="ufw curl wget git ca-certificates gnupg fail2ban"
+PACKAGES="ufw curl wget git ca-certificates gnupg fail2ban htop"
 
 wait_for_apt
 DEBIAN_FRONTEND=noninteractive apt-get install -y $PACKAGES \
