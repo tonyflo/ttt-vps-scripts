@@ -1,0 +1,27 @@
+{
+    email {$LETSENCRYPT_EMAIL}
+}
+
+www.{$PRIMARY_DOMAIN} {
+    redir https://{$PRIMARY_DOMAIN}{uri} permanent
+}
+
+{$PRIMARY_DOMAIN} {
+    encode gzip
+    reverse_proxy ghost:2368
+}
+
+{$MATOMO_DOMAIN} {
+    encode gzip
+    reverse_proxy matomo:80
+}
+
+{$UPTIME_DOMAIN} {
+    encode gzip
+    reverse_proxy uptime-kuma:3001
+}
+
+{$KUTT_DOMAIN} {
+    encode gzip
+    reverse_proxy kutt:3000
+}

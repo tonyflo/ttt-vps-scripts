@@ -1,0 +1,117 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - ghost
+      - matomo
+      - uptime-kuma
+      - kutt
+
+  ghost:
+    image: ghost:6-alpine
+    restart: unless-stopped
+    environment:
+      url: https://${PRIMARY_DOMAIN}
+      database__client: mysql
+      database__connection__host: ghost-db
+      database__connection__user: ghost
+      database__connection__password: ${GHOST_DB_PASSWORD}
+      database__connection__database: ghost
+      NODE_ENV: production
+    volumes:
+      - ghost_content:/var/lib/ghost/content
+    depends_on:
+      ghost-db:
+        condition: service_healthy
+
+  ghost-db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${GHOST_DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ghost
+      MYSQL_USER: ghost
+      MYSQL_PASSWORD: ${GHOST_DB_PASSWORD}
+    volumes:
+      - ghost_db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p\"$${MYSQL_ROOT_PASSWORD}\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  matomo:
+    image: matomo:5-apache
+    restart: unless-stopped
+    environment:
+      MATOMO_DATABASE_HOST: matomo-db
+      MATOMO_DATABASE_USERNAME: matomo
+      MATOMO_DATABASE_PASSWORD: ${MATOMO_DB_PASSWORD}
+      MATOMO_DATABASE_DBNAME: matomo
+      PHP_MEMORY_LIMIT: 512M
+    volumes:
+      - matomo_data:/var/www/html
+    depends_on:
+      matomo-db:
+        condition: service_healthy
+
+  matomo-db:
+    image: mariadb:11.4
+    restart: unless-stopped
+    command: --max-allowed-packet=64M
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MATOMO_DB_ROOT_PASSWORD}
+      MARIADB_DATABASE: matomo
+      MARIADB_USER: matomo
+      MARIADB_PASSWORD: ${MATOMO_DB_PASSWORD}
+    volumes:
+      - matomo_db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h localhost -uroot -p\"$${MARIADB_ROOT_PASSWORD}\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:2
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ}
+    volumes:
+      - uptime_kuma:/app/data
+
+  kutt:
+    image: kutt/kutt:latest
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      DEFAULT_DOMAIN: ${KUTT_DOMAIN}
+      JWT_SECRET: ${KUTT_JWT_SECRET}
+      DB_CLIENT: better-sqlite3
+      DB_FILENAME: /var/lib/kutt/data.sqlite
+      DISALLOW_REGISTRATION: "true"
+      DISALLOW_ANONYMOUS_LINKS: "true"
+      MAIL_ENABLED: "false"
+      TRUST_PROXY: "true"
+      CUSTOM_DOMAIN_USE_HTTPS: "true"
+    volumes:
+      - kutt_data:/var/lib/kutt
+
+volumes:
+  caddy_data:
+  caddy_config:
+  ghost_content:
+  ghost_db:
+  matomo_data:
+  matomo_db:
+  uptime_kuma:
+  kutt_data:
