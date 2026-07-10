@@ -321,3 +321,6 @@ else
     echo "1. Type 'exit' to log out of this root session."
     echo -e "2. Reconnect using: ${GREEN}ssh $NEW_USER@$IP${NC}\n"
 fi
+
+echo "For additional security and setup steps, including swap and SSH keys:"
+echo -e "${GREEN}https://ttt.do/vps-setup${NC}\n"
