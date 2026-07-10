@@ -1,25 +1,24 @@
 #!/bin/bash
 
-SCRIPT_VERSION="v1.2"
+SCRIPT_VERSION="v1.3"
 # ==============================================================================
 # Tony Teaches Tech's VPS Setup Script
 # ==============================================================================
 # This script is designed to take a freshly provisioned Ubuntu or Debian VPS
-# and immediately secure it while preparing it for Docker-based deployments.
+# and secure it while preparing it for Docker-based deployments.
 #
 # EXACTLY WHAT THIS SCRIPT DOES:
 # 0. Initial Checks: Ensures the script is run as root and verifies that
 #    the OS supports apt-get and systemd before proceeding.
 # 1. User Setup: Prompts to create a new non-root user, asks you to set a
 #    password, and adds them to the sudo group.
-# 2. SSH Hardening: Safely disables direct root login to prevent brute-force
-#    attacks while ensuring password and SSH key access remain enabled for
-#    the new user. Tests the config before applying to prevent lockouts.
+# 2. SSH Hardening: Disables password-based root login while keeping password
+#    and public-key authentication enabled.
 # 3. System Updates: Updates package lists and upgrades all system packages.
 # 4. Core Utilities & Security: Installs essential tools (ufw, curl, wget, git,
 #    ca-certificates, gnupg, htop) and starts Fail2Ban to block malicious IPs.
 # 5. Auto-Patching: Installs and configures 'unattended-upgrades' to
-#    automatically apply security updates and clean up old packages weekly.
+#    automatically apply security updates.
 # 6. Firewall Lockdown: Enables UFW, denying all incoming traffic by default,
 #    allowing outgoing traffic, and explicitly allowing SSH.
 # 7. Docker Engine: Fetches the official Docker installation script, installs
@@ -80,7 +79,7 @@ wait_for_apt() {
 # 0. INITIAL CHECKS
 # ============================================================
 
-[ "$EUID" -ne 0 ] && die "Run with: sudo bash setup.sh"
+[ "$EUID" -ne 0 ] && die "Run with: sudo bash setup-docker.sh"
 
 command -v apt-get >/dev/null 2>&1 || die "Unsupported OS (Debian/Ubuntu required)"
 command -v systemctl >/dev/null 2>&1 || die "Systemd required"
@@ -99,7 +98,7 @@ echo "- Makes SSH access more secure"
 echo "- Updates the system"
 echo "- Installs recommended packages"
 echo "- Enables automatic security updates"
-echo "- Locks down the firewall to only allow SSH"
+echo "- Deny incoming traffic except SSH with UFW"
 echo "- Installs Docker"
 
 # ============================================================
@@ -109,7 +108,7 @@ echo "- Installs Docker"
 step "1/7" "Create a new user"
 
 while true; do
-    read -p "Enter username (default: noname): " NEW_USER
+    read -r -p "Enter username (default: noname): " NEW_USER </dev/tty
 
     if [ -z "${NEW_USER:-}" ]; then
         NEW_USER="noname"
@@ -134,15 +133,15 @@ done
 if id "$NEW_USER" &>/dev/null; then
     info "User '$NEW_USER' already exists"
 else
-    useradd -m -s /bin/bash "$NEW_USER" >> "$LOG_FILE" 2>&1 || die "User creation failed"
+    adduser "$NEW_USER" </dev/tty \
+        || die "Failed to create user '$NEW_USER'"
     info "Created user '$NEW_USER'"
 fi
 
-usermod -aG sudo "$NEW_USER" >> "$LOG_FILE" 2>&1 || die "Failed to add user to sudo group"
-info "Added user '$NEW_USER' to sudo group"
+usermod -aG sudo "$NEW_USER" \
+    || die "Failed to add '$NEW_USER' to sudo group"
 
-echo "Set password for SSH login:"
-passwd "$NEW_USER" || die "Password setup failed"
+info "Added user '$NEW_USER' to sudo group"
 
 ok
 
@@ -152,28 +151,38 @@ ok
 
 step "2/7" "Secure SSH"
 
-SSH_CONF="/etc/ssh/sshd_config.d/60-ttt.conf"
+SSH_CONFIG="/etc/ssh/sshd_config"
+SSH_BACKUP="/etc/ssh/sshd_config.bak"
+SSH_DROP_IN="/etc/ssh/sshd_config.d/10-ttt.conf"
 
-if [ -f "$SSH_CONF" ]; then
-    cp "$SSH_CONF" "${SSH_CONF}.bak" >> "$LOG_FILE" 2>&1 || die "Backup failed"
-    info "Backed up old SSH config"
+if [ ! -f "$SSH_BACKUP" ]; then
+    cp "$SSH_CONFIG" "$SSH_BACKUP" \
+        || die "Failed to back up SSH config"
+
+    info "Backed up SSH config"
 fi
 
-cat <<EOF > "$SSH_CONF" || die "SSH config write failed"
+cat > "$SSH_DROP_IN" <<EOF || die "Failed to write SSH configuration"
 PermitRootLogin prohibit-password
 PasswordAuthentication yes
 PubkeyAuthentication yes
 EOF
-info "Secured SSH config"
 
-sshd -t >> "$LOG_FILE" 2>&1 || {
-    mv "${SSH_CONF}.bak" "$SSH_CONF" >> "$LOG_FILE" 2>&1
-    die "Invalid SSH config — rollback executed"
-}
-info "Validated new SSH config"
+if ! sshd -t; then
+    rm -f "$SSH_DROP_IN"
+    die "Invalid SSH configuration"
+fi
 
-systemctl restart ssh >> "$LOG_FILE" 2>&1 || systemctl restart sshd >> "$LOG_FILE" 2>&1 || die "Failed to restart SSH service"
-info "Restarted SSH service"
+if [ "$(sshd -T | awk '$1 == "passwordauthentication" {print $2}')" != "yes" ]; then
+    rm -f "$SSH_DROP_IN"
+    die "Password authentication is being overridden by another SSH configuration"
+fi
+
+systemctl restart ssh 2>/dev/null \
+    || systemctl restart sshd \
+    || die "Failed to restart SSH"
+
+info "Secured and restarted SSH"
 
 ok
 
@@ -205,8 +214,8 @@ wait_for_apt
 DEBIAN_FRONTEND=noninteractive apt-get install -y $PACKAGES \
 >> "$LOG_FILE" 2>&1 || die "package install failed"
 
-systemctl enable fail2ban >> "$LOG_FILE" 2>&1
-systemctl start fail2ban >> "$LOG_FILE" 2>&1
+systemctl enable --now fail2ban >> "$LOG_FILE" 2>&1 \
+    || die "Failed to enable or start Fail2Ban"
 
 info "Installed the following packages:"
 for pkg in $PACKAGES; do
@@ -228,17 +237,9 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades \
 echo unattended-upgrades unattended-upgrades/enable_auto_updates boolean true | debconf-set-selections \
     >> "$LOG_FILE" 2>&1 || die "failed to configure unattended-upgrades"
 
-dpkg-reconfigure -f noninteractive unattended-upgrades >> "$LOG_FILE" 2>&1 \
+DEBIAN_FRONTEND=noninteractive dpkg-reconfigure -f noninteractive unattended-upgrades \
+    >> "$LOG_FILE" 2>&1 \
     || die "failed to enable unattended-upgrades"
-
-cat <<EOF > /etc/apt/apt.conf.d/20auto-upgrades
-APT::Periodic::Update-Package-Lists "1";
-APT::Periodic::Unattended-Upgrade "1";
-APT::Periodic::AutocleanInterval "7";
-EOF
-
-systemctl enable --now apt-daily.timer >> "$LOG_FILE" 2>&1
-systemctl enable --now apt-daily-upgrade.timer >> "$LOG_FILE" 2>&1
 
 info "Enabled automatic security updates"
 
@@ -271,18 +272,25 @@ ok
 step "7/7" "Installing Docker"
 
 if ! command -v docker >/dev/null 2>&1; then
-    curl -fsSL https://get.docker.com -o /tmp/docker.sh >> "$LOG_FILE" 2>&1 || die "docker download failed"
+    curl -fsSL https://get.docker.com -o /tmp/docker.sh \
+        >> "$LOG_FILE" 2>&1 \
+        || die "docker download failed"
+
     info "Downloaded Docker install script"
-    
+
     wait_for_apt
-    sh /tmp/docker.sh >> "$LOG_FILE" 2>&1 || die "docker install failed"
+    sh /tmp/docker.sh >> "$LOG_FILE" 2>&1 \
+        || die "docker install failed"
+
     info "Installed Docker Engine"
-    
-    systemctl enable --now docker >> "$LOG_FILE" 2>&1 || die "docker service start failed"
-    info "Started Docker daemon"
 else
     info "Docker already installed"
 fi
+
+systemctl enable --now docker >> "$LOG_FILE" 2>&1 \
+    || die "Docker service start failed"
+
+info "Started Docker daemon"
 
 usermod -aG docker "$NEW_USER" >> "$LOG_FILE" 2>&1 || die "docker group add failed"
 info "Added user '$NEW_USER' to docker group"
@@ -302,7 +310,7 @@ IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
 [ -z "$IP" ] && IP="YOUR_SERVER_IP"
 
 echo "🚨 IMPORTANT NEXT STEPS:"
-echo -e "⚠ Docker WILL NOT WORK until you log in as the new user.\n"
+echo -e "⚠ Log out and reconnect before running Docker as the new user.\n"
 
 if [ -f /var/run/reboot-required ]; then
     echo -e "${YELLOW}Reboot required. Server restarting in 5 seconds...${NC}"
