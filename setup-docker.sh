@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPT_VERSION="v1.5"
+SCRIPT_VERSION="v1.6"
 # ==============================================================================
 # Tony Teaches Tech's VPS Setup Script
 # ==============================================================================
@@ -21,9 +21,9 @@ SCRIPT_VERSION="v1.5"
 #    automatically apply security updates.
 # 6. Firewall Lockdown: Enables UFW, denying all incoming traffic by default,
 #    allowing outgoing traffic, and explicitly allowing SSH.
-# 7. Docker Engine: Fetches the official Docker installation script, installs
-#    Docker, enables the systemd service, and adds the new user to the 'docker'
-#    group so containers can be run without 'sudo'.
+# 7. Docker Engine: Configures Docker's official apt repository, installs
+#    Docker Engine with Buildx and the Compose plugin, enables the systemd
+#    service, and adds the new user to the 'docker' group.
 # 8. Final Output: Dynamically fetches the server's public IP, prints
 #    login instructions for the new user, and detects if a system reboot is
 #    required.
@@ -274,26 +274,99 @@ ok
 
 step "7/7" "Installing Docker"
 
-if ! command -v docker >/dev/null 2>&1; then
-    curl -fsSL https://get.docker.com -o /tmp/docker.sh \
-        >> "$LOG_FILE" 2>&1 \
-        || die "docker download failed"
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    info "Docker Engine and Docker Compose already installed"
+else
+    [ -r /etc/os-release ] || die "Unable to detect operating system"
+    . /etc/os-release
 
-    info "Downloaded Docker install script"
+    case "${ID:-}" in
+        ubuntu)
+            DOCKER_DISTRO="ubuntu"
+            DOCKER_CODENAME="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
+            ;;
+        debian)
+            DOCKER_DISTRO="debian"
+            DOCKER_CODENAME="${VERSION_CODENAME:-}"
+            ;;
+        *)
+            die "Unsupported OS for Docker install: ${ID:-unknown} (Ubuntu/Debian required)"
+            ;;
+    esac
+
+    [ -n "$DOCKER_CODENAME" ] \
+        || die "Unable to determine OS codename for Docker repository"
+
+    # Remove packages that conflict with Docker's official packages.
+    CONFLICTING_PACKAGES=""
+    for pkg in docker.io docker-compose docker-compose-v2 docker-doc docker-buildx podman-docker containerd runc; do
+        if dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "ok installed"; then
+            CONFLICTING_PACKAGES="$CONFLICTING_PACKAGES $pkg"
+        fi
+    done
+
+    if [ -n "$CONFLICTING_PACKAGES" ]; then
+        wait_for_apt
+        DEBIAN_FRONTEND=noninteractive apt-get remove -y $CONFLICTING_PACKAGES \
+            >> "$LOG_FILE" 2>&1 \
+            || die "Failed to remove conflicting Docker packages"
+
+        info "Removed conflicting Docker packages"
+    fi
+
+    # Add Docker's official apt repository and signing key.
+    install -m 0755 -d /etc/apt/keyrings \
+        || die "Failed to create apt keyring directory"
+
+    curl -fsSL "https://download.docker.com/linux/$DOCKER_DISTRO/gpg" \
+        -o /etc/apt/keyrings/docker.asc \
+        >> "$LOG_FILE" 2>&1 \
+        || die "Failed to download Docker signing key"
+
+    chmod a+r /etc/apt/keyrings/docker.asc \
+        || die "Failed to set Docker signing key permissions"
+
+    DOCKER_ARCH="$(dpkg --print-architecture)" \
+        || die "Unable to determine system architecture"
+
+    cat > /etc/apt/sources.list.d/docker.sources <<EOF || die "Failed to add Docker apt repository"
+Types: deb
+URIs: https://download.docker.com/linux/$DOCKER_DISTRO
+Suites: $DOCKER_CODENAME
+Components: stable
+Architectures: $DOCKER_ARCH
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
 
     wait_for_apt
-    sh /tmp/docker.sh >> "$LOG_FILE" 2>&1 \
-        || die "docker install failed"
+    apt-get update -qq >> "$LOG_FILE" 2>&1 \
+        || die "apt update failed after adding Docker repository"
 
-    info "Installed Docker Engine"
-else
-    info "Docker already installed"
+    wait_for_apt
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+        docker-ce \
+        docker-ce-cli \
+        containerd.io \
+        docker-buildx-plugin \
+        docker-compose-plugin \
+        >> "$LOG_FILE" 2>&1 \
+        || die "Docker package installation failed"
+
+    info "Installed Docker Engine and Docker Compose from Docker's official apt repository"
 fi
 
 systemctl enable --now docker >> "$LOG_FILE" 2>&1 \
     || die "Docker service start failed"
 
 info "Started Docker daemon"
+
+command -v docker >/dev/null 2>&1 \
+    || die "Docker CLI not found after installation"
+
+docker compose version >> "$LOG_FILE" 2>&1 \
+    || die "Docker Compose plugin is not available"
+
+info "Verified Docker Engine and Docker Compose"
 
 usermod -aG docker "$NEW_USER" >> "$LOG_FILE" 2>&1 || die "docker group add failed"
 info "Added user '$NEW_USER' to docker group"
