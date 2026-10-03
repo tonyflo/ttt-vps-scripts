@@ -34,7 +34,7 @@ It automates many of the first steps you should usually perform before deploying
 * Enables unattended security updates
 * Installs and starts Fail2Ban
 * Configures UFW firewall rules
-* Installs Docker
+* Installs Docker Engine, Buildx, and the Docker Compose plugin from Docker's official apt repository
 * Adds the new user to the `docker` group
 
 ## Quick Start
@@ -47,9 +47,11 @@ curl -fsSL https://raw.githubusercontent.com/tonyflo/ttt-vps-scripts/main/setup-
 
 ## After the Script Finishes
 
-After running the script, to confirm Docker is working:
+After running the script, reconnect as the new user, then confirm Docker and Docker Compose are working:
 
 ```bash
+docker --version
+docker compose version
 docker run --rm hello-world
 ```
 
