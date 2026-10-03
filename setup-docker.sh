@@ -98,7 +98,7 @@ echo "- Makes SSH access more secure"
 echo "- Updates the system"
 echo "- Installs recommended packages"
 echo "- Enables automatic security updates"
-echo "- Deny incoming traffic except SSH with UFW"
+echo "- Denies incoming traffic except SSH"
 echo "- Installs Docker"
 
 # ============================================================
@@ -275,7 +275,7 @@ ok
 step "7/7" "Installing Docker"
 
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-    info "Docker Engine and Docker Compose already installed"
+    info "Docker + Compose already installed"
 else
     [ -r /etc/os-release ] || die "Unable to detect operating system"
     . /etc/os-release
@@ -352,7 +352,7 @@ EOF
         >> "$LOG_FILE" 2>&1 \
         || die "Docker package installation failed"
 
-    info "Installed Docker Engine and Docker Compose from Docker's official apt repository"
+    info "Installed Docker Engine + Compose"
 fi
 
 systemctl enable --now docker >> "$LOG_FILE" 2>&1 \
@@ -366,7 +366,7 @@ command -v docker >/dev/null 2>&1 \
 docker compose version >> "$LOG_FILE" 2>&1 \
     || die "Docker Compose plugin is not available"
 
-info "Verified Docker Engine and Docker Compose"
+info "Verified Docker + Compose"
 
 usermod -aG docker "$NEW_USER" >> "$LOG_FILE" 2>&1 || die "docker group add failed"
 info "Added user '$NEW_USER' to docker group"
@@ -385,7 +385,7 @@ IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
 [ -z "$IP" ] && IP=$(hostname -I | awk '{print $1}')
 [ -z "$IP" ] && IP="YOUR_SERVER_IP"
 
-echo "For additional security and setup steps, including swap and SSH keys:"
+echo "More security/setup steps (swap, SSH keys):"
 echo -e "${GREEN}https://ttt.do/vps-setup${NC}\n"
 
 echo "🚨 IMPORTANT NEXT STEPS:"
